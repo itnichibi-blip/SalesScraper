@@ -279,7 +279,7 @@ def main():
 
         with st.expander(f"🏢 {row['社名']}", expanded=False):
             st.session_state[f"check_{i}"] = st.checkbox(
-                "✅ この会社を出力対象に含める",
+                "⭐ この会社を保存・出力対象に選ぶ",
                 value=st.session_state[f"check_{i}"],
                 key=f"cb_{i}",
             )
