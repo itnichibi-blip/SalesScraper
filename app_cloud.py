@@ -3,6 +3,7 @@ import requests
 import streamlit as st
 import pandas as pd
 import json
+from saved_list import save_companies, load_saved_companies, delete_companies, count_saved
 
 # ─────────────────────────────────────────────
 # 設定
@@ -299,29 +300,74 @@ def main():
     selected_indices = [i for i in df.index if st.session_state.get(f"check_{i}", False)]
     selected_count   = len(selected_indices)
 
-    st.subheader(f"📤 CSV出力（{selected_count} 件選択中）")
+    st.subheader(f"📤 出力・保存（{selected_count} 件選択中）")
 
     if selected_count == 0:
-        st.info("会社のチェックボックスにチェックを入れるとCSV出力できます。")
-        return
+        st.info("会社のチェックボックスにチェックを入れると保存・CSV出力できます。")
+    else:
+        export_cols = ["社名", "住所", "TEL", "WebサイトURL"]
+        if enable_ai and "AI営業ポイント" in df.columns:
+            export_cols += ["事業内容推定", "AI営業ポイント"]
 
-    export_cols = ["社名", "住所", "TEL", "WebサイトURL"]
-    if enable_ai and "AI営業ポイント" in df.columns:
-        export_cols += ["事業内容推定", "AI営業ポイント"]
+        export_df = df.loc[selected_indices, export_cols].reset_index(drop=True)
 
-    export_df = df.loc[selected_indices, export_cols].reset_index(drop=True)
+        st.markdown(f"**出力プレビュー（{len(export_df)} 件）**")
+        st.dataframe(export_df, use_container_width=True)
 
-    st.markdown(f"**出力プレビュー（{len(export_df)} 件）**")
-    st.dataframe(export_df, use_container_width=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            csv_bytes = export_df.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                label="📥 CSVでダウンロード",
+                data=csv_bytes,
+                file_name=f"sales_list_{region}_{industry}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with col2:
+            if st.button("💾 保存リストに追加", use_container_width=True):
+                saved, skipped = save_companies(df, selected_indices)
+                if saved > 0:
+                    st.success(f"✅ {saved} 件を保存しました！")
+                if skipped > 0:
+                    st.warning(f"⚠️ {skipped} 件は重複のためスキップしました。")
 
-    csv_bytes = export_df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="📥 CSVでダウンロード",
-        data=csv_bytes,
-        file_name=f"sales_list_{region}_{industry}.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
+    # ── 保存済みリスト ───────────────────────
+    st.divider()
+    saved_count = count_saved()
+    st.subheader(f"💾 保存済みリスト（{saved_count} 件）")
+
+    if saved_count == 0:
+        st.info("まだ保存された企業はありません。")
+    else:
+        saved_df = load_saved_companies()
+
+        saved_csv = saved_df.drop(columns=["id"], errors="ignore").to_csv(
+            index=False
+        ).encode("utf-8-sig")
+        st.download_button(
+            label="📥 保存リストをCSVでエクスポート",
+            data=saved_csv,
+            file_name="saved_companies.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        for _, row in saved_df.iterrows():
+            with st.expander(f"💾 {row['社名']}", expanded=False):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"**保存日時：** {row['保存日時']}")
+                    st.markdown(f"**住所：** {row['住所']}")
+                    st.markdown(f"**TEL：** {row['TEL']}")
+                    if row["WebサイトURL"] and row["WebサイトURL"] != "情報なし":
+                        st.markdown(f"**URL：** [{row['WebサイトURL']}]({row['WebサイトURL']})")
+                    if row.get("AI営業ポイント"):
+                        st.info(f"💡 {row['AI営業ポイント']}")
+                with col2:
+                    if st.button("🗑️ 削除", key=f"del_{row['id']}"):
+                        delete_companies([row["id"]])
+                        st.rerun()
 
 
 if __name__ == "__main__":
