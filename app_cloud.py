@@ -3,7 +3,6 @@ import requests
 import streamlit as st
 import pandas as pd
 import json
-from saved_list import save_companies, load_saved_companies, delete_companies, count_saved
 
 # ─────────────────────────────────────────────
 # 設定
@@ -36,6 +35,18 @@ INDUSTRIES = [
     "印刷業", "広告業", "設計・デザイン業",
     "その他（直接入力）",
 ]
+
+# 業種別サブキーワード
+SUB_KEYWORDS = {
+    "卸売業":     ["（絞り込みなし）", "食品卸", "建材卸", "機械卸", "医薬品卸", "繊維卸", "電気卸"],
+    "小売業":     ["（絞り込みなし）", "スーパー", "ドラッグストア", "ホームセンター", "電器店"],
+    "製造業":     ["（絞り込みなし）", "食品製造", "金属加工", "印刷", "化学", "電子部品"],
+    "建設業":     ["（絞り込みなし）", "土木", "内装", "電気工事", "管工事", "塗装"],
+    "飲食業":     ["（絞り込みなし）", "レストラン", "居酒屋", "カフェ", "弁当", "ファストフード"],
+    "医療・福祉": ["（絞り込みなし）", "病院", "クリニック", "歯科", "介護", "薬局"],
+    "不動産業":   ["（絞り込みなし）", "賃貸", "売買", "管理", "開発"],
+    "情報通信業": ["（絞り込みなし）", "システム開発", "Web制作", "通信", "データセンター"],
+}
 
 # ─────────────────────────────────────────────
 # Google Places API
@@ -165,6 +176,14 @@ def main():
             else:
                 industry = industry_select
 
+        # サブキーワード
+        sub_options = SUB_KEYWORDS.get(industry, ["（絞り込みなし）"])
+        sub_keyword = st.selectbox(
+            "🔍 絞り込みキーワード（任意）",
+            options=sub_options,
+            help="業種をさらに絞り込む場合に選択してください"
+        )
+
         col_ai, col_btn = st.columns([3, 1])
         with col_ai:
             enable_ai = st.checkbox(
@@ -182,7 +201,10 @@ def main():
             st.warning("地域と業種の両方を入力してください。")
             st.stop()
 
-        query = f"{region} {industry}"
+        if sub_keyword and sub_keyword != "（絞り込みなし）":
+            query = f"{region} {sub_keyword}"
+        else:
+            query = f"{region} {industry}"
         st.info(f"検索クエリ：**{query}**")
 
         with st.spinner("Google Places API で企業を検索中…"):
@@ -239,6 +261,14 @@ def main():
     total_pages = max(1, (len(df) + PAGE_SIZE - 1) // PAGE_SIZE)
     if "current_page" not in st.session_state:
         st.session_state["current_page"] = 0
+        # ページ遷移時に先頭にスクロール
+        if st.session_state.pop("scroll_top", False):
+            st.markdown(
+                "<script>window.scrollTo(0, 0);</script>",
+                unsafe_allow_html=True,
+            )
+
+        st.subheader(f"📋 検索結果一覧（{len(df)} 件）")
 
     st.subheader(f"📋 検索結果一覧（{len(df)} 件）")
     col_all, col_none, _ = st.columns([1, 1, 6])
@@ -256,22 +286,25 @@ def main():
     end_idx   = min(start_idx + PAGE_SIZE, len(df))
     page_df   = df.iloc[start_idx:end_idx]
 
-    col_prev, col_info, col_next = st.columns([1, 3, 1])
-    with col_prev:
-        if st.button("← 前へ", disabled=(page == 0)):
-            st.session_state["current_page"] -= 1
-            st.rerun()
-    with col_info:
-        st.markdown(
-            f"<div style='text-align:center; padding-top:8px;'>"
-            f"{page + 1} / {total_pages} ページ（{start_idx + 1}〜{end_idx}件目）"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-    with col_next:
-        if st.button("次へ →", disabled=(page >= total_pages - 1)):
-            st.session_state["current_page"] += 1
-            st.rerun()
+    def render_pagination(key_suffix: str):
+        col_prev, col_info, col_next = st.columns([1, 3, 1])
+        with col_prev:
+            if st.button("← 前へ", disabled=(page == 0), key=f"prev_{key_suffix}"):
+                st.session_state["current_page"] -= 1
+                st.rerun()
+        with col_info:
+            st.markdown(
+                f"<div style='text-align:center; padding-top:8px;'>"
+                f"{page + 1} / {total_pages} ページ（{start_idx + 1}〜{end_idx}件目）"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        with col_next:
+            if st.button("次へ →", disabled=(page >= total_pages - 1), key=f"next_{key_suffix}"):
+                st.session_state["current_page"] += 1
+                st.rerun()
+
+    render_pagination("top")
 
     for i, row in page_df.iterrows():
         if f"check_{i}" not in st.session_state:
@@ -279,7 +312,7 @@ def main():
 
         with st.expander(f"🏢 {row['社名']}", expanded=False):
             st.session_state[f"check_{i}"] = st.checkbox(
-                "⭐ この会社を保存・出力対象に選ぶ",
+                "✅ この会社を出力対象に含める",
                 value=st.session_state[f"check_{i}"],
                 key=f"cb_{i}",
             )
@@ -300,74 +333,29 @@ def main():
     selected_indices = [i for i in df.index if st.session_state.get(f"check_{i}", False)]
     selected_count   = len(selected_indices)
 
-    st.subheader(f"📤 出力・保存（{selected_count} 件選択中）")
+    st.subheader(f"📤 CSV出力（{selected_count} 件選択中）")
 
     if selected_count == 0:
-        st.info("会社のチェックボックスにチェックを入れると保存・CSV出力できます。")
-    else:
-        export_cols = ["社名", "住所", "TEL", "WebサイトURL"]
-        if enable_ai and "AI営業ポイント" in df.columns:
-            export_cols += ["事業内容推定", "AI営業ポイント"]
+        st.info("会社のチェックボックスにチェックを入れるとCSV出力できます。")
+        return
 
-        export_df = df.loc[selected_indices, export_cols].reset_index(drop=True)
+    export_cols = ["社名", "住所", "TEL", "WebサイトURL"]
+    if enable_ai and "AI営業ポイント" in df.columns:
+        export_cols += ["事業内容推定", "AI営業ポイント"]
 
-        st.markdown(f"**出力プレビュー（{len(export_df)} 件）**")
-        st.dataframe(export_df, use_container_width=True)
+    export_df = df.loc[selected_indices, export_cols].reset_index(drop=True)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            csv_bytes = export_df.to_csv(index=False).encode("utf-8-sig")
-            st.download_button(
-                label="📥 CSVでダウンロード",
-                data=csv_bytes,
-                file_name=f"sales_list_{region}_{industry}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        with col2:
-            if st.button("💾 保存リストに追加", use_container_width=True):
-                saved, skipped = save_companies(df, selected_indices)
-                if saved > 0:
-                    st.success(f"✅ {saved} 件を保存しました！")
-                if skipped > 0:
-                    st.warning(f"⚠️ {skipped} 件は重複のためスキップしました。")
+    st.markdown(f"**出力プレビュー（{len(export_df)} 件）**")
+    st.dataframe(export_df, use_container_width=True)
 
-    # ── 保存済みリスト ───────────────────────
-    st.divider()
-    saved_count = count_saved()
-    st.subheader(f"💾 保存済みリスト（{saved_count} 件）")
-
-    if saved_count == 0:
-        st.info("まだ保存された企業はありません。")
-    else:
-        saved_df = load_saved_companies()
-
-        saved_csv = saved_df.drop(columns=["id"], errors="ignore").to_csv(
-            index=False
-        ).encode("utf-8-sig")
-        st.download_button(
-            label="📥 保存リストをCSVでエクスポート",
-            data=saved_csv,
-            file_name="saved_companies.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-        for _, row in saved_df.iterrows():
-            with st.expander(f"💾 {row['社名']}", expanded=False):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.markdown(f"**保存日時：** {row['保存日時']}")
-                    st.markdown(f"**住所：** {row['住所']}")
-                    st.markdown(f"**TEL：** {row['TEL']}")
-                    if row["WebサイトURL"] and row["WebサイトURL"] != "情報なし":
-                        st.markdown(f"**URL：** [{row['WebサイトURL']}]({row['WebサイトURL']})")
-                    if row.get("AI営業ポイント"):
-                        st.info(f"💡 {row['AI営業ポイント']}")
-                with col2:
-                    if st.button("🗑️ 削除", key=f"del_{row['id']}"):
-                        delete_companies([row["id"]])
-                        st.rerun()
+    csv_bytes = export_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="📥 CSVでダウンロード",
+        data=csv_bytes,
+        file_name=f"sales_list_{region}_{industry}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 
 if __name__ == "__main__":
